@@ -934,23 +934,38 @@ export default function RollingMigrationFormDrawer({
         }
     };
 
-    // OS assignment handler
+    // OS assignment handler (no patching to VMwareMachine; confirm on mismatch)
     const handleOSAssignment = async (vmId: string, osFamily: string) => {
         try {
+            // Find detected OS for this VM from current list
+            const vm = vmsWithAssignments.find(v => v.id === vmId);
+            const detected = (vm?.osFamily || "").toLowerCase();
+            const assigned = (osFamily || "").toLowerCase();
+            const assignedNorm = assigned.includes("windows") ? "windows" : assigned.includes("linux") ? "linux" : assigned;
+            const hasDetected = detected && detected !== "unknown";
+            const mismatch = hasDetected && assignedNorm && !detected.includes(assignedNorm);
+
+            if (mismatch) {
+                const proceed = window.confirm(`Assigned OS (${osFamily}) does not match detected OS (${vm?.osFamily}). Proceed anyway?`);
+                if (!proceed) return;
+            }
+
+            // Only update local state; the plan/template carries overrides per migration
             setVmOSAssignments(prev => ({ ...prev, [vmId]: osFamily }));
 
-            await patchVMwareMachine(vmId, {
-                spec: {
-                    vms: {
-                        osFamily: osFamily
-                    }
-                }
-            }, VJAILBREAK_DEFAULT_NAMESPACE);
-
+            // Reflect in table for immediate feedback
             const updatedVMs = vmsWithAssignments.map(v =>
                 v.id === vmId ? { ...v, osFamily: osFamily } : v
             );
             setVmsWithAssignments(updatedVMs);
+
+            // Toast/analytics
+            showToast(`OS family assigned for VM "${vm?.name || vmId}"`);
+            track('os_family_assigned', {
+                vm_id: vmId,
+                os_family: osFamily,
+                action: 'os-family-assignment'
+            });
 
         } catch (error) {
             console.error("Failed to assign OS family:", error);

@@ -39,6 +39,8 @@ export interface MigrationTemplateSpec {
   storageMapping: string
   targetPCDClusterName?: string
   useFlavorless?: boolean
+  // Optional OS override for this migration template
+  osFamily?: string
 }
 
 export interface Destination {

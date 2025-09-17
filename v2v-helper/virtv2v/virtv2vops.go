@@ -375,9 +375,12 @@ func RunCommandInGuestAllVolumes(disks []vm.VMDisk, command string, write bool, 
 	return strings.ToLower(string(out)), nil
 }
 
+// runGuestfish abstracts guestfish multi-volume calls for test substitution.
+var runGuestfish = RunCommandInGuestAllVolumes
+
 func GetBootableVolumeIndex(disks []vm.VMDisk) (int, error) {
 	command := "list-partitions"
-	partitionsStr, err := RunCommandInGuestAllVolumes(disks, command, false)
+	partitionsStr, err := runGuestfish(disks, command, false)
 	if err != nil {
 		return -1, fmt.Errorf("failed to run command (%s): %v: %s", command, err, strings.TrimSpace(partitionsStr))
 	}
@@ -385,21 +388,21 @@ func GetBootableVolumeIndex(disks []vm.VMDisk) (int, error) {
 	partitions := strings.Split(strings.TrimSpace(partitionsStr), "\n")
 	for _, partition := range partitions {
 		command := "part-to-dev"
-		device, err := RunCommandInGuestAllVolumes(disks, command, false, strings.TrimSpace(partition))
+		device, err := runGuestfish(disks, command, false, strings.TrimSpace(partition))
 		if err != nil {
 			fmt.Printf("failed to run command (%s): %v: %s\n", device, err, strings.TrimSpace(device))
 			return -1, err
 		}
 
 		command = "part-to-partnum"
-		num, err := RunCommandInGuestAllVolumes(disks, command, false, strings.TrimSpace(partition))
+		num, err := runGuestfish(disks, command, false, strings.TrimSpace(partition))
 		if err != nil {
 			fmt.Printf("failed to run command (%s): %v: %s\n", num, err, strings.TrimSpace(num))
 			return -1, err
 		}
 
 		command = "part-get-bootable"
-		bootable, err := RunCommandInGuestAllVolumes(disks, command, false, strings.TrimSpace(device), strings.TrimSpace(num))
+		bootable, err := runGuestfish(disks, command, false, strings.TrimSpace(device), strings.TrimSpace(num))
 		if err != nil {
 			fmt.Printf("failed to run command (%s): %v: %s\n", bootable, err, strings.TrimSpace(bootable))
 			return -1, err
@@ -407,15 +410,47 @@ func GetBootableVolumeIndex(disks []vm.VMDisk) (int, error) {
 
 		if strings.TrimSpace(bootable) == "true" {
 			command = "device-index"
-			index, err := RunCommandInGuestAllVolumes(disks, command, false, strings.TrimSpace(device))
+			index, err := runGuestfish(disks, command, false, strings.TrimSpace(device))
 			if err != nil {
 				fmt.Printf("failed to run command (%s): %v: %s\n", index, err, strings.TrimSpace(index))
 				return -1, err
 			}
+			log.Printf("Bootable flag detected on %s (partition %s). Using disk index %s as boot volume.", strings.TrimSpace(device), strings.TrimSpace(num), strings.TrimSpace(index))
 			return strconv.Atoi(strings.TrimSpace(index))
 		}
 	}
-	return -1, errors.New("bootable volume not found")
+
+	// Fallback for UEFI/GPT systems: look for EFI System Partition GUID
+	// EFI System Partition GUID: c12a7328-f81f-11d2-ba4b-00a0c93ec93b
+	const efiGUID = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+	for _, partition := range partitions {
+		devCmd := "part-to-dev"
+		device, err := runGuestfish(disks, devCmd, false, strings.TrimSpace(partition))
+		if err != nil {
+			continue
+		}
+		numCmd := "part-to-partnum"
+		num, err := runGuestfish(disks, numCmd, false, strings.TrimSpace(partition))
+		if err != nil {
+			continue
+		}
+		typeCmd := "part-get-gpt-type"
+		ptype, err := runGuestfish(disks, typeCmd, false, strings.TrimSpace(device), strings.TrimSpace(num))
+		if err != nil {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(ptype), efiGUID) {
+			idxCmd := "device-index"
+			index, err := runGuestfish(disks, idxCmd, false, strings.TrimSpace(device))
+			if err != nil {
+				continue
+			}
+			log.Printf("EFI System Partition detected on %s (partition %s). Selecting disk index %s as boot volume.", strings.TrimSpace(device), strings.TrimSpace(num), strings.TrimSpace(index))
+			return strconv.Atoi(strings.TrimSpace(index))
+		}
+	}
+
+	return -1, errors.New("bootable volume not found (no MBR boot flag or EFI system partition detected)")
 }
 
 func AddUdevRules(disks []vm.VMDisk, useSingleDisk bool, diskPath string, interfaces []string, macs []string) error {

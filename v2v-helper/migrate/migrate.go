@@ -522,7 +522,9 @@ func (migobj *Migrate) ConvertVolumes(ctx context.Context, vminfo vm.VMInfo) err
 		break
 	}
 
-	if strings.ToLower(vminfo.OSType) == constants.OSFamilyLinux {
+	// Preflight OS verification and detection
+	assigned := strings.ToLower(strings.TrimSpace(vminfo.OSType))
+	if assigned == constants.OSFamilyLinux {
 		if useSingleDisk {
 			// skip checking LVM, because its a single disk
 			osRelease, err = virtv2v.GetOsRelease(vminfo.VMDisks[bootVolumeIndex].Path)
@@ -547,6 +549,10 @@ func (migobj *Migrate) ConvertVolumes(ctx context.Context, vminfo vm.VMInfo) err
 			}
 		}
 		osDetected := strings.ToLower(strings.TrimSpace(osRelease))
+		// Abort early if clear Windows markers show up for a Linux-assigned VM
+		if strings.Contains(osDetected, "microsoft") || strings.Contains(osDetected, "windows") {
+			return errors.Errorf("OS mismatch: user assigned linuxguest but offline inspection indicates Windows content: %q", osDetected)
+		}
 		utils.PrintLog(fmt.Sprintf("OS detected by guestfish: %s", osDetected))
 		// Supported OSes
 		supportedOS := []string{
@@ -581,7 +587,7 @@ func (migobj *Migrate) ConvertVolumes(ctx context.Context, vminfo vm.VMInfo) err
 		}
 		utils.PrintLog("operating system compatibility check passed")
 
-	} else if strings.ToLower(vminfo.OSType) == constants.OSFamilyWindows {
+	} else if assigned == constants.OSFamilyWindows {
 		utils.PrintLog("operating system compatibility check passed")
 		if !useSingleDisk {
 			utils.PrintLog("checking for bootable volume in case of LDM")
@@ -589,6 +595,13 @@ func (migobj *Migrate) ConvertVolumes(ctx context.Context, vminfo vm.VMInfo) err
 			bootVolumeIndex, err = virtv2v.GetBootableVolumeIndex(vminfo.VMDisks)
 			if err != nil {
 				return errors.Wrap(err, "Failed to get bootable volume index")
+			}
+		}
+		// Lightweight OS sanity check for Windows assignment: ensure \Windows directory exists on chosen disk
+		if bootVolumeIndex >= 0 {
+			lsWin, lerr := virtv2v.RunCommandInGuest(vminfo.VMDisks[bootVolumeIndex].Path, "ls /Windows", false)
+			if lerr != nil || strings.TrimSpace(lsWin) == "" {
+				return errors.Errorf("OS mismatch: user assigned windowsguest but no Windows installation detected on boot disk: %v", lerr)
 			}
 		}
 	} else {

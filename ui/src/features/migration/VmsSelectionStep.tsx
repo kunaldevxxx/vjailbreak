@@ -175,6 +175,7 @@ export default function VmsSelectionStep({
 
   // OS assignment state
   const [vmOSAssignments, setVmOSAssignments] = useState<Record<string, string>>({});
+  const [confirmOsMismatch, setConfirmOsMismatch] = useState<{ vmId: string; detected?: string; assigned?: string } | null>(null);
 
   // IP editing and validation state - similar to RollingMigrationForm
   const [editingIpFor, setEditingIpFor] = useState<string | null>(null);
@@ -196,6 +197,18 @@ export default function VmsSelectionStep({
   const [assigningIPs, setAssigningIPs] = useState(false);
 
   // Define columns inside component to access state and functions
+  const computeConfidence = (detected?: string, assigned?: string): { level: 'high' | 'low' | 'none'; label: string; color: 'success' | 'warning' | 'default' } => {
+    const det = (detected || '').toLowerCase();
+    if (!det) return { level: 'none', label: '—', color: 'default' };
+    if (!assigned) return { level: 'high', label: 'detected', color: 'success' };
+    const ass = assigned.toLowerCase();
+    const norm = (s: string) => s.includes('windows') ? 'windows' : s.includes('linux') ? 'linux' : s;
+    const d = norm(det);
+    const a = norm(ass);
+    if (d === a) return { level: 'high', label: 'match', color: 'success' };
+    return { level: 'low', label: 'mismatch', color: 'warning' };
+  };
+
   const columns: GridColDef[] = [
     {
       field: "name",
@@ -371,101 +384,103 @@ export default function VmsSelectionStep({
     {
       field: "osFamily",
       headerName: "Operating System",
-      flex: 1,
+      flex: 1.3,
       hideable: true,
       renderCell: (params) => {
-        const vmId = params.row.id;
+        const vmId: string = params.row.id;
         const isSelected = selectedVMs.has(vmId);
-        const powerState = params.row?.powerState;
-        const detectedOsFamily = params.row?.osFamily;
-        const assignedOsFamily = vmOSAssignments[vmId];
+        const powerState: string | undefined = params.row?.powerState;
+        const detectedOsFamily: string | undefined = params.row?.osFamily;
+        const assignedOsFamily: string | undefined = vmOSAssignments[vmId];
         const currentOsFamily = assignedOsFamily || detectedOsFamily;
+        const confidence = computeConfidence(detectedOsFamily, assignedOsFamily);
 
+        const normDisplay = (() => {
+          if (!currentOsFamily || currentOsFamily === 'Unknown') return 'Unknown';
+            const lower = currentOsFamily.toLowerCase();
+            if (lower.includes('windows')) return 'Windows';
+            if (lower.includes('linux')) return 'Linux';
+            return 'Unknown';
+        })();
 
-        // Show dropdown for ALL powered-off VMs (allows changing selection)
-        if (isSelected && powerState === "powered-off") {
+        const badge = (
+          <Chip
+            size="small"
+            label={confidence.label}
+            color={confidence.color}
+            variant={confidence.level === 'low' ? 'outlined' : 'filled'}
+            sx={{ fontSize: '0.625rem', height: 20 }}
+          />
+        );
+
+        if (isSelected && powerState === 'powered-off') {
           return (
-            <Box sx={{ display: 'flex', alignItems: 'center', height: '100%' }}>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, width: '100%' }}>
               <Select
                 size="small"
                 value={(() => {
-                  if (!currentOsFamily || currentOsFamily === "Unknown") return "";
+                  if (!currentOsFamily || currentOsFamily === 'Unknown') return '';
                   const osLower = currentOsFamily.toLowerCase();
-                  if (osLower.includes("windows")) return "windowsGuest";
-                  if (osLower.includes("linux")) return "linuxGuest";
-                  return "";
+                  if (osLower.includes('windows')) return 'windowsGuest';
+                  if (osLower.includes('linux')) return 'linuxGuest';
+                  return '';
                 })()}
-                onChange={(e) => handleOSAssignment(vmId, e.target.value)}
+                onChange={(e) => handleOSAssignment(vmId, e.target.value as string, detectedOsFamily)}
                 displayEmpty
                 sx={{
-                  minWidth: 120,
-                  '& .MuiSelect-select': {
-                    padding: '4px 8px',
-                    fontSize: '0.875rem'
-                  }
+                  minWidth: 140,
+                  '& .MuiSelect-select': { padding: '4px 8px', fontSize: '0.75rem' }
                 }}
               >
                 <MenuItem value="">
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'text.secondary' }}>
-                    <WarningIcon sx={{ fontSize: 16 }} />
+                    <WarningIcon sx={{ fontSize: 14 }} />
                     <em>Select OS</em>
                   </Box>
                 </MenuItem>
                 <MenuItem value="windowsGuest">
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <img src={WindowsIcon} alt="Windows" style={{ width: 16, height: 16 }} />
+                    <img src={WindowsIcon} alt="Windows" style={{ width: 14, height: 14 }} />
                     Windows
                   </Box>
                 </MenuItem>
                 <MenuItem value="linuxGuest">
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <img src={LinuxIcon} alt="Linux" style={{ width: 16, height: 16 }} />
+                    <img src={LinuxIcon} alt="Linux" style={{ width: 14, height: 14 }} />
                     Linux
                   </Box>
                 </MenuItem>
               </Select>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <Typography variant='caption' sx={{ color: 'text.secondary' }}>Detected:</Typography>
+                <Typography variant='caption'>{detectedOsFamily ? detectedOsFamily : 'Unknown'}</Typography>
+                <Typography variant='caption' sx={{ color: 'text.secondary', ml: 1 }}>Assigned:</Typography>
+                <Typography variant='caption'>{assignedOsFamily ? assignedOsFamily : '—'}</Typography>
+                {badge}
+              </Box>
             </Box>
           );
         }
 
-        let displayValue = currentOsFamily || "Unknown";
-        let icon: React.ReactNode = null;
-
-        if (currentOsFamily && currentOsFamily.toLowerCase().includes("windows")) {
-          displayValue = "Windows";
-          icon = <img src={WindowsIcon} alt="Windows" style={{ width: 20, height: 20 }} />;
-        } else if (currentOsFamily && currentOsFamily.toLowerCase().includes("linux")) {
-          displayValue = "Linux";
-          icon = <img src={LinuxIcon} alt="Linux" style={{ width: 20, height: 20 }} />;
-        } else if (currentOsFamily && currentOsFamily !== "Unknown") {
-          displayValue = "Unknown";
-        }
-
         return (
-          <Tooltip title={powerState === "powered-off" ?
-            ((!currentOsFamily || currentOsFamily === "Unknown") ?
-              "OS assignment required for powered-off VMs" :
-              "Click to change OS selection") :
-            displayValue}>
-            <Box sx={{
-              display: 'flex',
-              alignItems: 'center',
-              height: '100%',
-              gap: 1
-            }}>
-              {icon}
-              {(!currentOsFamily || currentOsFamily === "Unknown") && (
-                <WarningIcon sx={{ color: 'warning.main', fontSize: 16 }} />
+          <Tooltip
+            title={`Detected: ${detectedOsFamily || 'Unknown'} | Assigned: ${assignedOsFamily || '—'}`}
+          >
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                {normDisplay === 'Windows' && <img src={WindowsIcon} alt='Windows' style={{ width: 16, height: 16 }} />}
+                {normDisplay === 'Linux' && <img src={LinuxIcon} alt='Linux' style={{ width: 16, height: 16 }} />}
+                {(!currentOsFamily || currentOsFamily === 'Unknown') && <WarningIcon sx={{ color: 'warning.main', fontSize: 16 }} />}
+                <Typography variant='body2' sx={{ fontSize: '0.75rem' }}>{normDisplay}</Typography>
+                {badge}
+              </Box>
+              {assignedOsFamily && assignedOsFamily !== detectedOsFamily && (
+                <Typography variant='caption' color='warning.main'>Override in effect</Typography>
               )}
-              <Typography variant="body2" sx={{
-                color: (!currentOsFamily || currentOsFamily === "Unknown") ? 'text.secondary' : 'text.primary'
-              }}>
-                {displayValue}
-              </Typography>
             </Box>
           </Tooltip>
         );
-      },
+      }
     },
     {
       field: "networks",
@@ -1002,21 +1017,19 @@ export default function VmsSelectionStep({
   };
 
   // OS assignment handler
-  const handleOSAssignment = async (vmId: string, osFamily: string) => {
+  const handleOSAssignment = async (vmId: string, osFamily: string, detectedOsFamily?: string) => {
     try {
-      // Update local state first for immediate UI feedback
-      setVmOSAssignments(prev => ({ ...prev, [vmId]: osFamily }));
-
-      const vm = vmsWithFlavor.find(v => v.name === vmId);
-      if (vm?.vmWareMachineName) {
-        await patchVMwareMachine(vm.vmWareMachineName, {
-          spec: {
-            vms: {
-              osFamily: osFamily
-            }
-          }
-        });
+      // If mismatch between detected and assigned OS, ask for confirmation
+      const det = (detectedOsFamily || "").toLowerCase();
+      const ass = (osFamily || "").toLowerCase();
+      const assNorm = ass.includes("windows") ? "windows" : ass.includes("linux") ? "linux" : ass;
+      const mismatch = det && assNorm && !det.includes(assNorm);
+      if (mismatch) {
+        setConfirmOsMismatch({ vmId, detected: detectedOsFamily, assigned: osFamily });
       }
+
+      // Update local state for immediate UI feedback; parent form consumes osFamily from rows
+      setVmOSAssignments(prev => ({ ...prev, [vmId]: osFamily }));
 
 
       // Track the analytics event
@@ -1046,6 +1059,20 @@ export default function VmsSelectionStep({
       });
       showToast(`Failed to assign OS family for VM "${vmId}": ${error instanceof Error ? error.message : 'Unknown error'}`, "error");
     }
+  };
+
+  // Handle OS mismatch confirmation
+  const handleCloseOsMismatch = (proceed: boolean) => {
+    if (!confirmOsMismatch) return;
+    if (!proceed) {
+      // Revert local OS assignment
+      setVmOSAssignments(prev => {
+        const next = { ...prev } as Record<string, string>;
+        delete next[confirmOsMismatch.vmId];
+        return next;
+      });
+    }
+    setConfirmOsMismatch(null);
   };
 
   // Bulk IP editing functions (removed - not accessible via UI anymore)
@@ -1803,6 +1830,20 @@ export default function VmsSelectionStep({
           {toastMessage}
         </Alert>
       </Snackbar>
+
+      {/* OS mismatch confirmation */}
+      <Dialog open={!!confirmOsMismatch} onClose={() => handleCloseOsMismatch(false)}>
+        <DialogTitle>Confirm OS override</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">Detected OS: {confirmOsMismatch?.detected || 'Unknown'}</Typography>
+          <Typography variant="body2" sx={{ mt: 1 }}>Assigned OS: {confirmOsMismatch?.assigned}</Typography>
+          <Typography variant="body2" sx={{ mt: 2 }}>Proceeding with a wrong OS can cause conversion failures. Continue?</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => handleCloseOsMismatch(false)}>Cancel</Button>
+          <Button onClick={() => handleCloseOsMismatch(true)} color="warning" variant="contained">Proceed</Button>
+        </DialogActions>
+      </Dialog>
     </VmsSelectionStepContainer>
   );
 }
